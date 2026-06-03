@@ -1,5 +1,3 @@
-# Loan Default Prediction System - One Page Summary
-
 ## Project goal
 Build a classification model that predicts whether a loan applicant is likely to repay (`Y`) or default/not repay (`N`) using applicant, loan, credit history, and property-area information.
 
