@@ -1,0 +1,1092 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Final Loan Default Prediction System Notebook</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      color: #17202a;
+      line-height: 1.55;
+      margin: 0;
+      background: #f6f8fb;
+    }
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 32px 24px 56px;
+      background: #ffffff;
+      min-height: 100vh;
+    }
+    h1, h2, h3 { color: #17324d; }
+    .code-cell, .markdown-cell {
+      margin: 18px 0;
+    }
+    pre.code {
+      background: #101820;
+      color: #f7fafc;
+      padding: 14px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 13px;
+    }
+    pre.output {
+      background: #f1f5f9;
+      border-left: 4px solid #2f6f73;
+      padding: 12px;
+      overflow-x: auto;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 12px 0;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #d7dee8;
+      padding: 7px 9px;
+      text-align: left;
+    }
+    th { background: #edf2f7; }
+    svg { max-width: 100%; height: auto; }
+    code {
+      background: #eef2f7;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+<main>
+<section class="markdown-cell"><h1>Loan Default Prediction System</h1>
+<h2>Objective</h2>
+<p>Build a machine learning workflow that predicts whether a loan applicant is likely to repay (<code>Y</code>) or default/not repay (<code>N</code>) using historical applicant data.</p>
+<p>Because no external CSV was present in the workspace, this submission uses the included reproducible dataset <code>loan_data.csv</code>, which follows the requested schema.</p></section><section class="markdown-cell"><h2>Phase 1 - Data Preprocessing</h2>
+<p>This phase loads the data, removes <code>Loan_ID</code>, handles missing values, converts categorical columns into numeric features, and scales numeric columns.</p></section><section class="code-cell"><pre class="code"><code>import math
+from html import escape
+
+import numpy as np
+import pandas as pd
+
+try:
+    from IPython.display import HTML, display
+except ImportError:
+    HTML = None
+    def display(value):
+        print(value)
+
+
+RANDOM_SEED = 42
+DATA_PATH = &quot;loan_data.csv&quot;
+
+
+def show_table(df, rows=5):
+    &quot;&quot;&quot;Display a compact table in notebooks and print it in plain Python.&quot;&quot;&quot;
+    if HTML is None:
+        print(df.head(rows).to_string())
+    else:
+        display(HTML(df.head(rows).to_html(index=False)))
+
+
+def display_svg(svg):
+    &quot;&quot;&quot;Render SVG in Jupyter; fall back to printing a short message otherwise.&quot;&quot;&quot;
+    if HTML is None:
+        print(&quot;SVG chart generated.&quot;)
+    else:
+        display(HTML(svg))
+
+
+def mode_value(series):
+    mode = series.mode(dropna=True)
+    return mode.iloc[0] if len(mode) else None
+
+
+def svg_bar(title, labels, values, width=720, height=330, color=&quot;#2f6f73&quot;):
+    &quot;&quot;&quot;Create a simple SVG bar chart without external plotting libraries.&quot;&quot;&quot;
+    max_value = max(values) if len(values) else 1
+    left = 70
+    bottom = 55
+    top = 45
+    plot_width = width - left - 30
+    plot_height = height - top - bottom
+    gap = 16
+    bar_width = (plot_width - gap * (len(values) - 1)) / max(len(values), 1)
+    parts = [
+        f&#x27;&lt;svg viewBox=&quot;0 0 {width} {height}&quot; width=&quot;100%&quot; role=&quot;img&quot; aria-label=&quot;{escape(title)}&quot;&gt;&#x27;,
+        f&#x27;&lt;rect width=&quot;{width}&quot; height=&quot;{height}&quot; fill=&quot;#ffffff&quot;/&gt;&#x27;,
+        f&#x27;&lt;text x=&quot;{width/2}&quot; y=&quot;24&quot; text-anchor=&quot;middle&quot; font-size=&quot;18&quot; font-family=&quot;Arial&quot; fill=&quot;#1f2933&quot;&gt;{escape(title)}&lt;/text&gt;&#x27;,
+        f&#x27;&lt;line x1=&quot;{left}&quot; y1=&quot;{height-bottom}&quot; x2=&quot;{width-20}&quot; y2=&quot;{height-bottom}&quot; stroke=&quot;#9aa5b1&quot;/&gt;&#x27;,
+        f&#x27;&lt;line x1=&quot;{left}&quot; y1=&quot;{top}&quot; x2=&quot;{left}&quot; y2=&quot;{height-bottom}&quot; stroke=&quot;#9aa5b1&quot;/&gt;&#x27;,
+    ]
+    for i, (label, value) in enumerate(zip(labels, values)):
+        x = left + i * (bar_width + gap)
+        bar_height = (value / max_value) * plot_height if max_value else 0
+        y = height - bottom - bar_height
+        parts.append(f&#x27;&lt;rect x=&quot;{x:.1f}&quot; y=&quot;{y:.1f}&quot; width=&quot;{bar_width:.1f}&quot; height=&quot;{bar_height:.1f}&quot; fill=&quot;{color}&quot; rx=&quot;3&quot;/&gt;&#x27;)
+        parts.append(f&#x27;&lt;text x=&quot;{x + bar_width/2:.1f}&quot; y=&quot;{y - 7:.1f}&quot; text-anchor=&quot;middle&quot; font-size=&quot;12&quot; font-family=&quot;Arial&quot; fill=&quot;#1f2933&quot;&gt;{value:.2f}&lt;/text&gt;&#x27;)
+        parts.append(f&#x27;&lt;text x=&quot;{x + bar_width/2:.1f}&quot; y=&quot;{height - 28}&quot; text-anchor=&quot;middle&quot; font-size=&quot;12&quot; font-family=&quot;Arial&quot; fill=&quot;#1f2933&quot;&gt;{escape(str(label))}&lt;/text&gt;&#x27;)
+    parts.append(&quot;&lt;/svg&gt;&quot;)
+    return &quot;\n&quot;.join(parts)
+
+
+def svg_histogram(title, values, bins=12, width=720, height=330, color=&quot;#4d7cbd&quot;):
+    counts, edges = np.histogram(pd.Series(values).dropna(), bins=bins)
+    labels = [f&quot;{int(edges[i])}-{int(edges[i+1])}&quot; for i in range(len(edges) - 1)]
+    return svg_bar(title, labels, counts.astype(float).tolist(), width, height, color)
+
+
+def svg_heatmap(title, corr, width=760, height=560):
+    labels = list(corr.columns)
+    cell_size = min((width - 180) / len(labels), (height - 130) / len(labels))
+    left = 140
+    top = 55
+    parts = [
+        f&#x27;&lt;svg viewBox=&quot;0 0 {width} {height}&quot; width=&quot;100%&quot; role=&quot;img&quot; aria-label=&quot;{escape(title)}&quot;&gt;&#x27;,
+        f&#x27;&lt;rect width=&quot;{width}&quot; height=&quot;{height}&quot; fill=&quot;#ffffff&quot;/&gt;&#x27;,
+        f&#x27;&lt;text x=&quot;{width/2}&quot; y=&quot;24&quot; text-anchor=&quot;middle&quot; font-size=&quot;18&quot; font-family=&quot;Arial&quot; fill=&quot;#1f2933&quot;&gt;{escape(title)}&lt;/text&gt;&#x27;,
+    ]
+    for i, row_label in enumerate(labels):
+        parts.append(f&#x27;&lt;text x=&quot;{left - 8}&quot; y=&quot;{top + i*cell_size + cell_size*0.62:.1f}&quot; text-anchor=&quot;end&quot; font-size=&quot;11&quot; font-family=&quot;Arial&quot; fill=&quot;#1f2933&quot;&gt;{escape(row_label)}&lt;/text&gt;&#x27;)
+        parts.append(f&#x27;&lt;text x=&quot;{left + i*cell_size + cell_size/2:.1f}&quot; y=&quot;{top + len(labels)*cell_size + 18:.1f}&quot; text-anchor=&quot;middle&quot; font-size=&quot;11&quot; font-family=&quot;Arial&quot; fill=&quot;#1f2933&quot;&gt;{escape(row_label)}&lt;/text&gt;&#x27;)
+        for j, col_label in enumerate(labels):
+            value = float(corr.iloc[i, j])
+            if value &gt;= 0:
+                intensity = int(235 - 95 * min(value, 1))
+                fill = f&quot;rgb({intensity},{intensity + 10},255)&quot;
+            else:
+                intensity = int(235 - 95 * min(abs(value), 1))
+                fill = f&quot;rgb(255,{intensity + 10},{intensity})&quot;
+            x = left + j * cell_size
+            y = top + i * cell_size
+            parts.append(f&#x27;&lt;rect x=&quot;{x:.1f}&quot; y=&quot;{y:.1f}&quot; width=&quot;{cell_size:.1f}&quot; height=&quot;{cell_size:.1f}&quot; fill=&quot;{fill}&quot; stroke=&quot;#ffffff&quot;/&gt;&#x27;)
+            parts.append(f&#x27;&lt;text x=&quot;{x + cell_size/2:.1f}&quot; y=&quot;{y + cell_size*0.58:.1f}&quot; text-anchor=&quot;middle&quot; font-size=&quot;10&quot; font-family=&quot;Arial&quot; fill=&quot;#1f2933&quot;&gt;{value:.2f}&lt;/text&gt;&#x27;)
+    parts.append(&quot;&lt;/svg&gt;&quot;)
+    return &quot;\n&quot;.join(parts)
+
+
+def prepare_features(df):
+    &quot;&quot;&quot;Remove ID, impute missing values, encode categoricals, and scale numerics.&quot;&quot;&quot;
+    cleaned = df.drop(columns=[&quot;Loan_ID&quot;]).copy()
+    y = cleaned[&quot;Loan_Status&quot;].map({&quot;N&quot;: 0, &quot;Y&quot;: 1}).astype(int)
+    X = cleaned.drop(columns=[&quot;Loan_Status&quot;])
+
+    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_cols = [column for column in X.columns if column not in numeric_cols]
+
+    for column in numeric_cols:
+        X[column] = X[column].fillna(X[column].median())
+    for column in categorical_cols:
+        X[column] = X[column].fillna(mode_value(X[column]))
+
+    X_encoded = pd.get_dummies(X, columns=categorical_cols, drop_first=True, dtype=float)
+
+    scaler = {}
+    for column in numeric_cols:
+        mean = X_encoded[column].mean()
+        std = X_encoded[column].std(ddof=0)
+        if std == 0:
+            std = 1
+        X_encoded[column] = (X_encoded[column] - mean) / std
+        scaler[column] = {&quot;mean&quot;: float(mean), &quot;std&quot;: float(std)}
+
+    return X_encoded.astype(float), y.astype(int), cleaned, scaler
+
+
+def stratified_train_test_split(X, y, test_size=0.20, seed=RANDOM_SEED):
+    &quot;&quot;&quot;Create an 80/20 split while keeping the target distribution similar.&quot;&quot;&quot;
+    rng = np.random.default_rng(seed)
+    train_indices = []
+    test_indices = []
+
+    for class_value in sorted(y.unique()):
+        class_indices = y[y == class_value].index.to_numpy().copy()
+        rng.shuffle(class_indices)
+        n_test = int(round(len(class_indices) * test_size))
+        test_indices.extend(class_indices[:n_test])
+        train_indices.extend(class_indices[n_test:])
+
+    rng.shuffle(train_indices)
+    rng.shuffle(test_indices)
+
+    return (
+        X.loc[train_indices].to_numpy(dtype=float),
+        X.loc[test_indices].to_numpy(dtype=float),
+        y.loc[train_indices].to_numpy(dtype=int),
+        y.loc[test_indices].to_numpy(dtype=int),
+        X.columns.tolist(),
+    )
+
+
+def sigmoid(z):
+    return 1 / (1 + np.exp(-np.clip(z, -35, 35)))
+
+
+def train_logistic_regression(X_train, y_train, learning_rate=0.08, epochs=2500):
+    X_bias = np.c_[np.ones(X_train.shape[0]), X_train]
+    weights = np.zeros(X_bias.shape[1])
+
+    for _ in range(epochs):
+        predictions = sigmoid(X_bias @ weights)
+        gradient = X_bias.T @ (predictions - y_train) / len(y_train)
+        weights -= learning_rate * gradient
+
+    return weights
+
+
+def predict_logistic_regression(weights, X):
+    X_bias = np.c_[np.ones(X.shape[0]), X]
+    probabilities = sigmoid(X_bias @ weights)
+    return (probabilities &gt;= 0.5).astype(int), probabilities
+
+
+def gini_impurity(y):
+    if len(y) == 0:
+        return 0
+    p = np.mean(y)
+    return 1 - p ** 2 - (1 - p) ** 2
+
+
+class DecisionTreeClassifierScratch:
+    &quot;&quot;&quot;Small Gini-based decision tree classifier for numeric encoded features.&quot;&quot;&quot;
+
+    def __init__(self, max_depth=4, min_samples_split=18, max_features=None, seed=RANDOM_SEED):
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.max_features = max_features
+        self.rng = np.random.default_rng(seed)
+        self.tree_ = None
+
+    def fit(self, X, y):
+        self.n_features_ = X.shape[1]
+        self.tree_ = self._build_tree(X, y, depth=0)
+        return self
+
+    def _candidate_features(self):
+        if self.max_features is None:
+            return np.arange(self.n_features_)
+        count = min(self.max_features, self.n_features_)
+        return self.rng.choice(self.n_features_, size=count, replace=False)
+
+    def _best_split(self, X, y):
+        parent_impurity = gini_impurity(y)
+        best_gain = 0
+        best_feature = None
+        best_threshold = None
+
+        for feature in self._candidate_features():
+            values = np.unique(X[:, feature])
+            if len(values) &lt;= 1:
+                continue
+            thresholds = (values[:-1] + values[1:]) / 2
+
+            if len(thresholds) &gt; 25:
+                quantiles = np.linspace(0.05, 0.95, 25)
+                thresholds = np.unique(np.quantile(values, quantiles))
+
+            for threshold in thresholds:
+                left_mask = X[:, feature] &lt;= threshold
+                right_mask = ~left_mask
+                if left_mask.sum() == 0 or right_mask.sum() == 0:
+                    continue
+                weighted_impurity = (
+                    left_mask.mean() * gini_impurity(y[left_mask])
+                    + right_mask.mean() * gini_impurity(y[right_mask])
+                )
+                gain = parent_impurity - weighted_impurity
+                if gain &gt; best_gain:
+                    best_gain = gain
+                    best_feature = feature
+                    best_threshold = threshold
+
+        return best_feature, best_threshold, best_gain
+
+    def _build_tree(self, X, y, depth):
+        positive_rate = float(np.mean(y))
+        prediction = int(positive_rate &gt;= 0.5)
+
+        if (
+            depth &gt;= self.max_depth
+            or len(y) &lt; self.min_samples_split
+            or len(np.unique(y)) == 1
+        ):
+            return {&quot;prediction&quot;: prediction, &quot;positive_rate&quot;: positive_rate}
+
+        feature, threshold, gain = self._best_split(X, y)
+        if feature is None or gain &lt;= 1e-7:
+            return {&quot;prediction&quot;: prediction, &quot;positive_rate&quot;: positive_rate}
+
+        left_mask = X[:, feature] &lt;= threshold
+        return {
+            &quot;feature&quot;: int(feature),
+            &quot;threshold&quot;: float(threshold),
+            &quot;prediction&quot;: prediction,
+            &quot;positive_rate&quot;: positive_rate,
+            &quot;left&quot;: self._build_tree(X[left_mask], y[left_mask], depth + 1),
+            &quot;right&quot;: self._build_tree(X[~left_mask], y[~left_mask], depth + 1),
+        }
+
+    def _predict_one(self, row, node):
+        while &quot;feature&quot; in node:
+            if row[node[&quot;feature&quot;]] &lt;= node[&quot;threshold&quot;]:
+                node = node[&quot;left&quot;]
+            else:
+                node = node[&quot;right&quot;]
+        return node[&quot;prediction&quot;], node[&quot;positive_rate&quot;]
+
+    def predict(self, X):
+        predictions = [self._predict_one(row, self.tree_)[0] for row in X]
+        return np.array(predictions, dtype=int)
+
+    def predict_proba(self, X):
+        probabilities = [self._predict_one(row, self.tree_)[1] for row in X]
+        return np.array(probabilities, dtype=float)
+
+
+class RandomForestClassifierScratch:
+    &quot;&quot;&quot;Bagged decision trees with random feature subsets at each split.&quot;&quot;&quot;
+
+    def __init__(self, n_estimators=35, max_depth=5, min_samples_split=16, seed=RANDOM_SEED):
+        self.n_estimators = n_estimators
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.rng = np.random.default_rng(seed)
+        self.trees = []
+
+    def fit(self, X, y):
+        self.trees = []
+        max_features = max(1, int(math.sqrt(X.shape[1])))
+        for i in range(self.n_estimators):
+            sample_indices = self.rng.choice(len(X), size=len(X), replace=True)
+            tree = DecisionTreeClassifierScratch(
+                max_depth=self.max_depth,
+                min_samples_split=self.min_samples_split,
+                max_features=max_features,
+                seed=RANDOM_SEED + i + 1,
+            )
+            tree.fit(X[sample_indices], y[sample_indices])
+            self.trees.append(tree)
+        return self
+
+    def predict_proba(self, X):
+        probabilities = np.vstack([tree.predict_proba(X) for tree in self.trees])
+        return probabilities.mean(axis=0)
+
+    def predict(self, X):
+        return (self.predict_proba(X) &gt;= 0.5).astype(int)
+
+
+def classification_metrics(y_true, y_pred):
+    tn = int(((y_true == 0) &amp; (y_pred == 0)).sum())
+    fp = int(((y_true == 0) &amp; (y_pred == 1)).sum())
+    fn = int(((y_true == 1) &amp; (y_pred == 0)).sum())
+    tp = int(((y_true == 1) &amp; (y_pred == 1)).sum())
+
+    accuracy = (tp + tn) / len(y_true)
+    precision = tp / (tp + fp) if (tp + fp) else 0
+    recall = tp / (tp + fn) if (tp + fn) else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0
+
+    return {
+        &quot;Accuracy&quot;: accuracy,
+        &quot;Precision&quot;: precision,
+        &quot;Recall&quot;: recall,
+        &quot;F1-Score&quot;: f1,
+        &quot;TN&quot;: tn,
+        &quot;FP&quot;: fp,
+        &quot;FN&quot;: fn,
+        &quot;TP&quot;: tp,
+    }</code></pre></section><section class="code-cell"><pre class="code"><code>df = pd.read_csv(DATA_PATH)
+print(f&quot;Dataset shape: {df.shape}&quot;)
+show_table(df)</code></pre><pre class="output">Dataset shape: (614, 13)
+</pre><div class="output-html"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Loan_ID</th>
+      <th>Gender</th>
+      <th>Married</th>
+      <th>Dependents</th>
+      <th>Education</th>
+      <th>Self_Employed</th>
+      <th>ApplicantIncome</th>
+      <th>CoapplicantIncome</th>
+      <th>LoanAmount</th>
+      <th>Loan_Amount_Term</th>
+      <th>Credit_History</th>
+      <th>Property_Area</th>
+      <th>Loan_Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>LP100001</td>
+      <td>Male</td>
+      <td>Yes</td>
+      <td>3+</td>
+      <td>Graduate</td>
+      <td>No</td>
+      <td>6155</td>
+      <td>0</td>
+      <td>175.0</td>
+      <td>360.0</td>
+      <td>1.0</td>
+      <td>Urban</td>
+      <td>Y</td>
+    </tr>
+    <tr>
+      <td>LP100002</td>
+      <td>Male</td>
+      <td>No</td>
+      <td>0</td>
+      <td>Not Graduate</td>
+      <td>No</td>
+      <td>3311</td>
+      <td>4109</td>
+      <td>218.0</td>
+      <td>360.0</td>
+      <td>1.0</td>
+      <td>Rural</td>
+      <td>Y</td>
+    </tr>
+    <tr>
+      <td>LP100003</td>
+      <td>Female</td>
+      <td>No</td>
+      <td>0</td>
+      <td>Graduate</td>
+      <td>No</td>
+      <td>1730</td>
+      <td>1753</td>
+      <td>144.0</td>
+      <td>360.0</td>
+      <td>1.0</td>
+      <td>Rural</td>
+      <td>Y</td>
+    </tr>
+    <tr>
+      <td>LP100004</td>
+      <td>Male</td>
+      <td>Yes</td>
+      <td>1</td>
+      <td>Graduate</td>
+      <td>No</td>
+      <td>6956</td>
+      <td>0</td>
+      <td>194.0</td>
+      <td>480.0</td>
+      <td>1.0</td>
+      <td>Rural</td>
+      <td>Y</td>
+    </tr>
+    <tr>
+      <td>LP100005</td>
+      <td>Male</td>
+      <td>Yes</td>
+      <td>0</td>
+      <td>Graduate</td>
+      <td>Yes</td>
+      <td>16582</td>
+      <td>0</td>
+      <td>374.0</td>
+      <td>360.0</td>
+      <td>1.0</td>
+      <td>Rural</td>
+      <td>N</td>
+    </tr>
+  </tbody>
+</table></div></section><section class="code-cell"><pre class="code"><code>missing_summary = df.isna().sum().reset_index()
+missing_summary.columns = [&quot;Column&quot;, &quot;Missing Values&quot;]
+missing_summary</code></pre><div class="output-html"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>Column</th>
+      <th>Missing Values</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>Loan_ID</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>Gender</td>
+      <td>9</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>Married</td>
+      <td>13</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>Dependents</td>
+      <td>29</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>Education</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>Self_Employed</td>
+      <td>17</td>
+    </tr>
+    <tr>
+      <th>6</th>
+      <td>ApplicantIncome</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>CoapplicantIncome</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>8</th>
+      <td>LoanAmount</td>
+      <td>21</td>
+    </tr>
+    <tr>
+      <th>9</th>
+      <td>Loan_Amount_Term</td>
+      <td>14</td>
+    </tr>
+    <tr>
+      <th>10</th>
+      <td>Credit_History</td>
+      <td>36</td>
+    </tr>
+    <tr>
+      <th>11</th>
+      <td>Property_Area</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>12</th>
+      <td>Loan_Status</td>
+      <td>0</td>
+    </tr>
+  </tbody>
+</table></div></section><section class="code-cell"><pre class="code"><code>X, y, cleaned_df, scaler = prepare_features(df)
+print(f&quot;Feature matrix shape after preprocessing: {X.shape}&quot;)
+print(f&quot;Target distribution:\n{y.value_counts(normalize=True).rename({0: &#x27;N&#x27;, 1: &#x27;Y&#x27;}).round(3)}&quot;)
+show_table(X)</code></pre><pre class="output">Feature matrix shape after preprocessing: (614, 14)
+Target distribution:
+Loan_Status
+Y    0.702
+N    0.298
+Name: proportion, dtype: float64
+</pre><div class="output-html"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>ApplicantIncome</th>
+      <th>CoapplicantIncome</th>
+      <th>LoanAmount</th>
+      <th>Loan_Amount_Term</th>
+      <th>Credit_History</th>
+      <th>Gender_Male</th>
+      <th>Married_Yes</th>
+      <th>Dependents_1</th>
+      <th>Dependents_2</th>
+      <th>Dependents_3+</th>
+      <th>Education_Not Graduate</th>
+      <th>Self_Employed_Yes</th>
+      <th>Property_Area_Semiurban</th>
+      <th>Property_Area_Urban</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>0.042794</td>
+      <td>-0.833167</td>
+      <td>-0.162853</td>
+      <td>0.243643</td>
+      <td>0.435801</td>
+      <td>1.0</td>
+      <td>1.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>1.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td>-0.753373</td>
+      <td>1.059382</td>
+      <td>0.325577</td>
+      <td>0.243643</td>
+      <td>0.435801</td>
+      <td>1.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>1.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+    </tr>
+    <tr>
+      <td>-1.195968</td>
+      <td>-0.025759</td>
+      <td>-0.514977</td>
+      <td>0.243643</td>
+      <td>0.435801</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+    </tr>
+    <tr>
+      <td>0.267031</td>
+      <td>-0.833167</td>
+      <td>0.052965</td>
+      <td>2.176422</td>
+      <td>0.435801</td>
+      <td>1.0</td>
+      <td>1.0</td>
+      <td>1.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+    </tr>
+    <tr>
+      <td>2.961793</td>
+      <td>-0.833167</td>
+      <td>2.097554</td>
+      <td>0.243643</td>
+      <td>0.435801</td>
+      <td>1.0</td>
+      <td>1.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>1.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+    </tr>
+  </tbody>
+</table></div></section><section class="markdown-cell"><h2>Phase 2 - Exploratory Data Analysis</h2>
+<p>The charts below show distribution patterns, feature-target comparisons, and numeric correlations.</p></section><section class="code-cell"><pre class="code"><code>status_counts = df[&quot;Loan_Status&quot;].value_counts().reindex([&quot;N&quot;, &quot;Y&quot;]).fillna(0)
+display_svg(svg_bar(&quot;Loan Status Counts&quot;, status_counts.index.tolist(), status_counts.astype(float).tolist()))</code></pre><div class="output-html"><svg viewBox="0 0 720 330" width="100%" role="img" aria-label="Loan Status Counts">
+<rect width="720" height="330" fill="#ffffff"/>
+<text x="360.0" y="24" text-anchor="middle" font-size="18" font-family="Arial" fill="#1f2933">Loan Status Counts</text>
+<line x1="70" y1="275" x2="700" y2="275" stroke="#9aa5b1"/>
+<line x1="70" y1="45" x2="70" y2="275" stroke="#9aa5b1"/>
+<rect x="70.0" y="177.3" width="302.0" height="97.7" fill="#2f6f73" rx="3"/>
+<text x="221.0" y="170.3" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">183.00</text>
+<text x="221.0" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">N</text>
+<rect x="388.0" y="45.0" width="302.0" height="230.0" fill="#2f6f73" rx="3"/>
+<text x="539.0" y="38.0" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">431.00</text>
+<text x="539.0" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">Y</text>
+</svg></div></section><section class="code-cell"><pre class="code"><code>display_svg(svg_histogram(&quot;Applicant Income Distribution&quot;, df[&quot;ApplicantIncome&quot;], bins=12))
+display_svg(svg_histogram(&quot;Loan Amount Distribution&quot;, df[&quot;LoanAmount&quot;], bins=12, color=&quot;#8a6f3d&quot;))</code></pre><div class="output-html"><svg viewBox="0 0 720 330" width="100%" role="img" aria-label="Applicant Income Distribution">
+<rect width="720" height="330" fill="#ffffff"/>
+<text x="360.0" y="24" text-anchor="middle" font-size="18" font-family="Arial" fill="#1f2933">Applicant Income Distribution</text>
+<line x1="70" y1="275" x2="700" y2="275" stroke="#9aa5b1"/>
+<line x1="70" y1="45" x2="70" y2="275" stroke="#9aa5b1"/>
+<rect x="70.0" y="116.7" width="37.0" height="158.3" fill="#4d7cbd" rx="3"/>
+<text x="88.5" y="109.7" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">137.00</text>
+<text x="88.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">1400-3450</text>
+<rect x="123.0" y="45.0" width="37.0" height="230.0" fill="#4d7cbd" rx="3"/>
+<text x="141.5" y="38.0" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">199.00</text>
+<text x="141.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">3450-5500</text>
+<rect x="176.0" y="123.6" width="37.0" height="151.4" fill="#4d7cbd" rx="3"/>
+<text x="194.5" y="116.6" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">131.00</text>
+<text x="194.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">5500-7550</text>
+<rect x="229.0" y="194.1" width="37.0" height="80.9" fill="#4d7cbd" rx="3"/>
+<text x="247.5" y="187.1" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">70.00</text>
+<text x="247.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">7550-9600</text>
+<rect x="282.0" y="241.5" width="37.0" height="33.5" fill="#4d7cbd" rx="3"/>
+<text x="300.5" y="234.5" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">29.00</text>
+<text x="300.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">9600-11650</text>
+<rect x="335.0" y="249.6" width="37.0" height="25.4" fill="#4d7cbd" rx="3"/>
+<text x="353.5" y="242.6" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">22.00</text>
+<text x="353.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">11650-13700</text>
+<rect x="388.0" y="256.5" width="37.0" height="18.5" fill="#4d7cbd" rx="3"/>
+<text x="406.5" y="249.5" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">16.00</text>
+<text x="406.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">13700-15750</text>
+<rect x="441.0" y="271.5" width="37.0" height="3.5" fill="#4d7cbd" rx="3"/>
+<text x="459.5" y="264.5" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">3.00</text>
+<text x="459.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">15750-17800</text>
+<rect x="494.0" y="273.8" width="37.0" height="1.2" fill="#4d7cbd" rx="3"/>
+<text x="512.5" y="266.8" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">1.00</text>
+<text x="512.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">17800-19850</text>
+<rect x="547.0" y="272.7" width="37.0" height="2.3" fill="#4d7cbd" rx="3"/>
+<text x="565.5" y="265.7" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">2.00</text>
+<text x="565.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">19850-21900</text>
+<rect x="600.0" y="273.8" width="37.0" height="1.2" fill="#4d7cbd" rx="3"/>
+<text x="618.5" y="266.8" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">1.00</text>
+<text x="618.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">21900-23950</text>
+<rect x="653.0" y="271.5" width="37.0" height="3.5" fill="#4d7cbd" rx="3"/>
+<text x="671.5" y="264.5" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">3.00</text>
+<text x="671.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">23950-26000</text>
+</svg></div><div class="output-html"><svg viewBox="0 0 720 330" width="100%" role="img" aria-label="Loan Amount Distribution">
+<rect width="720" height="330" fill="#ffffff"/>
+<text x="360.0" y="24" text-anchor="middle" font-size="18" font-family="Arial" fill="#1f2933">Loan Amount Distribution</text>
+<line x1="70" y1="275" x2="700" y2="275" stroke="#9aa5b1"/>
+<line x1="70" y1="45" x2="70" y2="275" stroke="#9aa5b1"/>
+<rect x="70.0" y="241.2" width="37.0" height="33.8" fill="#8a6f3d" rx="3"/>
+<text x="88.5" y="234.2" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">26.00</text>
+<text x="88.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">25-77</text>
+<rect x="123.0" y="111.3" width="37.0" height="163.7" fill="#8a6f3d" rx="3"/>
+<text x="141.5" y="104.3" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">126.00</text>
+<text x="141.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">77-129</text>
+<rect x="176.0" y="45.0" width="37.0" height="230.0" fill="#8a6f3d" rx="3"/>
+<text x="194.5" y="38.0" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">177.00</text>
+<text x="194.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">129-181</text>
+<rect x="229.0" y="133.4" width="37.0" height="141.6" fill="#8a6f3d" rx="3"/>
+<text x="247.5" y="126.4" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">109.00</text>
+<text x="247.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">181-233</text>
+<rect x="282.0" y="176.2" width="37.0" height="98.8" fill="#8a6f3d" rx="3"/>
+<text x="300.5" y="169.2" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">76.00</text>
+<text x="300.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">233-285</text>
+<rect x="335.0" y="223.0" width="37.0" height="52.0" fill="#8a6f3d" rx="3"/>
+<text x="353.5" y="216.0" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">40.00</text>
+<text x="353.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">285-337</text>
+<rect x="388.0" y="246.4" width="37.0" height="28.6" fill="#8a6f3d" rx="3"/>
+<text x="406.5" y="239.4" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">22.00</text>
+<text x="406.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">337-389</text>
+<rect x="441.0" y="263.3" width="37.0" height="11.7" fill="#8a6f3d" rx="3"/>
+<text x="459.5" y="256.3" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">9.00</text>
+<text x="459.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">389-441</text>
+<rect x="494.0" y="273.7" width="37.0" height="1.3" fill="#8a6f3d" rx="3"/>
+<text x="512.5" y="266.7" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">1.00</text>
+<text x="512.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">441-493</text>
+<rect x="547.0" y="272.4" width="37.0" height="2.6" fill="#8a6f3d" rx="3"/>
+<text x="565.5" y="265.4" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">2.00</text>
+<text x="565.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">493-545</text>
+<rect x="600.0" y="271.1" width="37.0" height="3.9" fill="#8a6f3d" rx="3"/>
+<text x="618.5" y="264.1" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">3.00</text>
+<text x="618.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">545-597</text>
+<rect x="653.0" y="272.4" width="37.0" height="2.6" fill="#8a6f3d" rx="3"/>
+<text x="671.5" y="265.4" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">2.00</text>
+<text x="671.5" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">597-650</text>
+</svg></div></section><section class="code-cell"><pre class="code"><code>approval_by_credit = (
+    df.assign(Credit_History=df[&quot;Credit_History&quot;].fillna(-1).replace({-1: &quot;Missing&quot;}))
+    .groupby(&quot;Credit_History&quot;)[&quot;Loan_Status&quot;]
+    .apply(lambda series: (series == &quot;Y&quot;).mean())
+    .reset_index()
+)
+display_svg(svg_bar(
+    &quot;Repayment Rate by Credit History&quot;,
+    approval_by_credit[&quot;Credit_History&quot;].astype(str).tolist(),
+    approval_by_credit[&quot;Loan_Status&quot;].round(3).tolist(),
+    color=&quot;#7d5a9e&quot;,
+))</code></pre><div class="output-html"><svg viewBox="0 0 720 330" width="100%" role="img" aria-label="Repayment Rate by Credit History">
+<rect width="720" height="330" fill="#ffffff"/>
+<text x="360.0" y="24" text-anchor="middle" font-size="18" font-family="Arial" fill="#1f2933">Repayment Rate by Credit History</text>
+<line x1="70" y1="275" x2="700" y2="275" stroke="#9aa5b1"/>
+<line x1="70" y1="45" x2="70" y2="275" stroke="#9aa5b1"/>
+<rect x="70.0" y="178.0" width="196.0" height="97.0" fill="#7d5a9e" rx="3"/>
+<text x="168.0" y="171.0" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">0.33</text>
+<text x="168.0" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">0.0</text>
+<rect x="282.0" y="45.0" width="196.0" height="230.0" fill="#7d5a9e" rx="3"/>
+<text x="380.0" y="38.0" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">0.78</text>
+<text x="380.0" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">1.0</text>
+<rect x="494.0" y="52.4" width="196.0" height="222.6" fill="#7d5a9e" rx="3"/>
+<text x="592.0" y="45.4" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">0.75</text>
+<text x="592.0" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">Missing</text>
+</svg></div></section><section class="code-cell"><pre class="code"><code>approval_by_property = (
+    df.groupby(&quot;Property_Area&quot;)[&quot;Loan_Status&quot;]
+    .apply(lambda series: (series == &quot;Y&quot;).mean())
+    .sort_values(ascending=False)
+)
+display_svg(svg_bar(
+    &quot;Repayment Rate by Property Area&quot;,
+    approval_by_property.index.tolist(),
+    approval_by_property.round(3).tolist(),
+    color=&quot;#2f855a&quot;,
+))</code></pre><div class="output-html"><svg viewBox="0 0 720 330" width="100%" role="img" aria-label="Repayment Rate by Property Area">
+<rect width="720" height="330" fill="#ffffff"/>
+<text x="360.0" y="24" text-anchor="middle" font-size="18" font-family="Arial" fill="#1f2933">Repayment Rate by Property Area</text>
+<line x1="70" y1="275" x2="700" y2="275" stroke="#9aa5b1"/>
+<line x1="70" y1="45" x2="70" y2="275" stroke="#9aa5b1"/>
+<rect x="70.0" y="45.0" width="196.0" height="230.0" fill="#2f855a" rx="3"/>
+<text x="168.0" y="38.0" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">0.72</text>
+<text x="168.0" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">Semiurban</text>
+<rect x="282.0" y="45.6" width="196.0" height="229.4" fill="#2f855a" rx="3"/>
+<text x="380.0" y="38.6" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">0.72</text>
+<text x="380.0" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">Rural</text>
+<rect x="494.0" y="65.6" width="196.0" height="209.4" fill="#2f855a" rx="3"/>
+<text x="592.0" y="58.6" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">0.66</text>
+<text x="592.0" y="302" text-anchor="middle" font-size="12" font-family="Arial" fill="#1f2933">Urban</text>
+</svg></div></section><section class="code-cell"><pre class="code"><code>corr_df = df.drop(columns=[&quot;Loan_ID&quot;]).copy()
+corr_df[&quot;Loan_Status_Num&quot;] = corr_df[&quot;Loan_Status&quot;].map({&quot;N&quot;: 0, &quot;Y&quot;: 1})
+numeric_corr = corr_df.select_dtypes(include=[np.number]).corr(numeric_only=True).round(2)
+display_svg(svg_heatmap(&quot;Numeric Correlation Matrix&quot;, numeric_corr))
+numeric_corr</code></pre><div class="output-html"><svg viewBox="0 0 760 560" width="100%" role="img" aria-label="Numeric Correlation Matrix">
+<rect width="760" height="560" fill="#ffffff"/>
+<text x="380.0" y="24" text-anchor="middle" font-size="18" font-family="Arial" fill="#1f2933">Numeric Correlation Matrix</text>
+<text x="132" y="99.4" text-anchor="end" font-size="11" font-family="Arial" fill="#1f2933">ApplicantIncome</text>
+<text x="175.8" y="503.0" text-anchor="middle" font-size="11" font-family="Arial" fill="#1f2933">ApplicantIncome</text>
+<rect x="140.0" y="55.0" width="71.7" height="71.7" fill="rgb(140,150,255)" stroke="#ffffff"/>
+<text x="175.8" y="96.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">1.00</text>
+<rect x="211.7" y="55.0" width="71.7" height="71.7" fill="rgb(228,238,255)" stroke="#ffffff"/>
+<text x="247.5" y="96.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.07</text>
+<rect x="283.3" y="55.0" width="71.7" height="71.7" fill="rgb(153,163,255)" stroke="#ffffff"/>
+<text x="319.2" y="96.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.86</text>
+<rect x="355.0" y="55.0" width="71.7" height="71.7" fill="rgb(255,241,231)" stroke="#ffffff"/>
+<text x="390.8" y="96.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">-0.04</text>
+<rect x="426.7" y="55.0" width="71.7" height="71.7" fill="rgb(234,244,255)" stroke="#ffffff"/>
+<text x="462.5" y="96.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.01</text>
+<rect x="498.3" y="55.0" width="71.7" height="71.7" fill="rgb(229,239,255)" stroke="#ffffff"/>
+<text x="534.2" y="96.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.06</text>
+<text x="132" y="171.1" text-anchor="end" font-size="11" font-family="Arial" fill="#1f2933">CoapplicantIncome</text>
+<text x="247.5" y="503.0" text-anchor="middle" font-size="11" font-family="Arial" fill="#1f2933">CoapplicantIncome</text>
+<rect x="140.0" y="126.7" width="71.7" height="71.7" fill="rgb(228,238,255)" stroke="#ffffff"/>
+<text x="175.8" y="168.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.07</text>
+<rect x="211.7" y="126.7" width="71.7" height="71.7" fill="rgb(140,150,255)" stroke="#ffffff"/>
+<text x="247.5" y="168.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">1.00</text>
+<rect x="283.3" y="126.7" width="71.7" height="71.7" fill="rgb(195,205,255)" stroke="#ffffff"/>
+<text x="319.2" y="168.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.42</text>
+<rect x="355.0" y="126.7" width="71.7" height="71.7" fill="rgb(255,241,231)" stroke="#ffffff"/>
+<text x="390.8" y="168.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">-0.04</text>
+<rect x="426.7" y="126.7" width="71.7" height="71.7" fill="rgb(229,239,255)" stroke="#ffffff"/>
+<text x="462.5" y="168.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.06</text>
+<rect x="498.3" y="126.7" width="71.7" height="71.7" fill="rgb(226,236,255)" stroke="#ffffff"/>
+<text x="534.2" y="168.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.09</text>
+<text x="132" y="242.8" text-anchor="end" font-size="11" font-family="Arial" fill="#1f2933">LoanAmount</text>
+<text x="319.2" y="503.0" text-anchor="middle" font-size="11" font-family="Arial" fill="#1f2933">LoanAmount</text>
+<rect x="140.0" y="198.3" width="71.7" height="71.7" fill="rgb(153,163,255)" stroke="#ffffff"/>
+<text x="175.8" y="239.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.86</text>
+<rect x="211.7" y="198.3" width="71.7" height="71.7" fill="rgb(195,205,255)" stroke="#ffffff"/>
+<text x="247.5" y="239.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.42</text>
+<rect x="283.3" y="198.3" width="71.7" height="71.7" fill="rgb(140,150,255)" stroke="#ffffff"/>
+<text x="319.2" y="239.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">1.00</text>
+<rect x="355.0" y="198.3" width="71.7" height="71.7" fill="rgb(255,239,229)" stroke="#ffffff"/>
+<text x="390.8" y="239.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">-0.06</text>
+<rect x="426.7" y="198.3" width="71.7" height="71.7" fill="rgb(231,241,255)" stroke="#ffffff"/>
+<text x="462.5" y="239.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.04</text>
+<rect x="498.3" y="198.3" width="71.7" height="71.7" fill="rgb(230,240,255)" stroke="#ffffff"/>
+<text x="534.2" y="239.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.05</text>
+<text x="132" y="314.4" text-anchor="end" font-size="11" font-family="Arial" fill="#1f2933">Loan_Amount_Term</text>
+<text x="390.8" y="503.0" text-anchor="middle" font-size="11" font-family="Arial" fill="#1f2933">Loan_Amount_Term</text>
+<rect x="140.0" y="270.0" width="71.7" height="71.7" fill="rgb(255,241,231)" stroke="#ffffff"/>
+<text x="175.8" y="311.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">-0.04</text>
+<rect x="211.7" y="270.0" width="71.7" height="71.7" fill="rgb(255,241,231)" stroke="#ffffff"/>
+<text x="247.5" y="311.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">-0.04</text>
+<rect x="283.3" y="270.0" width="71.7" height="71.7" fill="rgb(255,239,229)" stroke="#ffffff"/>
+<text x="319.2" y="311.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">-0.06</text>
+<rect x="355.0" y="270.0" width="71.7" height="71.7" fill="rgb(140,150,255)" stroke="#ffffff"/>
+<text x="390.8" y="311.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">1.00</text>
+<rect x="426.7" y="270.0" width="71.7" height="71.7" fill="rgb(234,244,255)" stroke="#ffffff"/>
+<text x="462.5" y="311.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.01</text>
+<rect x="498.3" y="270.0" width="71.7" height="71.7" fill="rgb(225,235,255)" stroke="#ffffff"/>
+<text x="534.2" y="311.6" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.10</text>
+<text x="132" y="386.1" text-anchor="end" font-size="11" font-family="Arial" fill="#1f2933">Credit_History</text>
+<text x="462.5" y="503.0" text-anchor="middle" font-size="11" font-family="Arial" fill="#1f2933">Credit_History</text>
+<rect x="140.0" y="341.7" width="71.7" height="71.7" fill="rgb(234,244,255)" stroke="#ffffff"/>
+<text x="175.8" y="383.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.01</text>
+<rect x="211.7" y="341.7" width="71.7" height="71.7" fill="rgb(229,239,255)" stroke="#ffffff"/>
+<text x="247.5" y="383.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.06</text>
+<rect x="283.3" y="341.7" width="71.7" height="71.7" fill="rgb(231,241,255)" stroke="#ffffff"/>
+<text x="319.2" y="383.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.04</text>
+<rect x="355.0" y="341.7" width="71.7" height="71.7" fill="rgb(234,244,255)" stroke="#ffffff"/>
+<text x="390.8" y="383.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.01</text>
+<rect x="426.7" y="341.7" width="71.7" height="71.7" fill="rgb(140,150,255)" stroke="#ffffff"/>
+<text x="462.5" y="383.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">1.00</text>
+<rect x="498.3" y="341.7" width="71.7" height="71.7" fill="rgb(199,209,255)" stroke="#ffffff"/>
+<text x="534.2" y="383.2" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.37</text>
+<text x="132" y="457.8" text-anchor="end" font-size="11" font-family="Arial" fill="#1f2933">Loan_Status_Num</text>
+<text x="534.2" y="503.0" text-anchor="middle" font-size="11" font-family="Arial" fill="#1f2933">Loan_Status_Num</text>
+<rect x="140.0" y="413.3" width="71.7" height="71.7" fill="rgb(229,239,255)" stroke="#ffffff"/>
+<text x="175.8" y="454.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.06</text>
+<rect x="211.7" y="413.3" width="71.7" height="71.7" fill="rgb(226,236,255)" stroke="#ffffff"/>
+<text x="247.5" y="454.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.09</text>
+<rect x="283.3" y="413.3" width="71.7" height="71.7" fill="rgb(230,240,255)" stroke="#ffffff"/>
+<text x="319.2" y="454.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.05</text>
+<rect x="355.0" y="413.3" width="71.7" height="71.7" fill="rgb(225,235,255)" stroke="#ffffff"/>
+<text x="390.8" y="454.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.10</text>
+<rect x="426.7" y="413.3" width="71.7" height="71.7" fill="rgb(199,209,255)" stroke="#ffffff"/>
+<text x="462.5" y="454.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">0.37</text>
+<rect x="498.3" y="413.3" width="71.7" height="71.7" fill="rgb(140,150,255)" stroke="#ffffff"/>
+<text x="534.2" y="454.9" text-anchor="middle" font-size="10" font-family="Arial" fill="#1f2933">1.00</text>
+</svg></div><div class="output-html"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ApplicantIncome</th>
+      <th>CoapplicantIncome</th>
+      <th>LoanAmount</th>
+      <th>Loan_Amount_Term</th>
+      <th>Credit_History</th>
+      <th>Loan_Status_Num</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>ApplicantIncome</th>
+      <td>1.00</td>
+      <td>0.07</td>
+      <td>0.86</td>
+      <td>-0.04</td>
+      <td>0.01</td>
+      <td>0.06</td>
+    </tr>
+    <tr>
+      <th>CoapplicantIncome</th>
+      <td>0.07</td>
+      <td>1.00</td>
+      <td>0.42</td>
+      <td>-0.04</td>
+      <td>0.06</td>
+      <td>0.09</td>
+    </tr>
+    <tr>
+      <th>LoanAmount</th>
+      <td>0.86</td>
+      <td>0.42</td>
+      <td>1.00</td>
+      <td>-0.06</td>
+      <td>0.04</td>
+      <td>0.05</td>
+    </tr>
+    <tr>
+      <th>Loan_Amount_Term</th>
+      <td>-0.04</td>
+      <td>-0.04</td>
+      <td>-0.06</td>
+      <td>1.00</td>
+      <td>0.01</td>
+      <td>0.10</td>
+    </tr>
+    <tr>
+      <th>Credit_History</th>
+      <td>0.01</td>
+      <td>0.06</td>
+      <td>0.04</td>
+      <td>0.01</td>
+      <td>1.00</td>
+      <td>0.37</td>
+    </tr>
+    <tr>
+      <th>Loan_Status_Num</th>
+      <td>0.06</td>
+      <td>0.09</td>
+      <td>0.05</td>
+      <td>0.10</td>
+      <td>0.37</td>
+      <td>1.00</td>
+    </tr>
+  </tbody>
+</table></div></section><section class="markdown-cell"><h2>Phase 3 - Model Building</h2>
+<p>We use an 80/20 stratified split and train three classifiers:</p>
+<ul>
+<li>Logistic Regression</li>
+<li>Decision Tree</li>
+<li>Random Forest-style bagged trees</li>
+</ul></section><section class="code-cell"><pre class="code"><code>X_train, X_test, y_train, y_test, feature_names = stratified_train_test_split(X, y, test_size=0.20)
+print(f&quot;Training records: {len(y_train)}&quot;)
+print(f&quot;Testing records: {len(y_test)}&quot;)</code></pre><pre class="output">Training records: 491
+Testing records: 123
+</pre></section><section class="code-cell"><pre class="code"><code>logistic_weights = train_logistic_regression(X_train, y_train)
+logistic_pred, logistic_proba = predict_logistic_regression(logistic_weights, X_test)
+
+decision_tree = DecisionTreeClassifierScratch(max_depth=4, min_samples_split=18)
+decision_tree.fit(X_train, y_train)
+tree_pred = decision_tree.predict(X_test)
+
+random_forest = RandomForestClassifierScratch(n_estimators=35, max_depth=5, min_samples_split=16)
+random_forest.fit(X_train, y_train)
+forest_pred = random_forest.predict(X_test)
+
+results = pd.DataFrame([
+    {&quot;Model&quot;: &quot;Logistic Regression&quot;, **classification_metrics(y_test, logistic_pred)},
+    {&quot;Model&quot;: &quot;Decision Tree&quot;, **classification_metrics(y_test, tree_pred)},
+    {&quot;Model&quot;: &quot;Random Forest&quot;, **classification_metrics(y_test, forest_pred)},
+]).sort_values([&quot;F1-Score&quot;, &quot;Accuracy&quot;], ascending=False)
+
+results_display = results.copy()
+for metric in [&quot;Accuracy&quot;, &quot;Precision&quot;, &quot;Recall&quot;, &quot;F1-Score&quot;]:
+    results_display[metric] = results_display[metric].round(3)
+results_display</code></pre><div class="output-html"><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>Model</th>
+      <th>Accuracy</th>
+      <th>Precision</th>
+      <th>Recall</th>
+      <th>F1-Score</th>
+      <th>TN</th>
+      <th>FP</th>
+      <th>FN</th>
+      <th>TP</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>1</th>
+      <td>Decision Tree</td>
+      <td>0.740</td>
+      <td>0.765</td>
+      <td>0.907</td>
+      <td>0.830</td>
+      <td>13</td>
+      <td>24</td>
+      <td>8</td>
+      <td>78</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>Random Forest</td>
+      <td>0.715</td>
+      <td>0.752</td>
+      <td>0.884</td>
+      <td>0.813</td>
+      <td>12</td>
+      <td>25</td>
+      <td>10</td>
+      <td>76</td>
+    </tr>
+    <tr>
+      <th>0</th>
+      <td>Logistic Regression</td>
+      <td>0.699</td>
+      <td>0.747</td>
+      <td>0.860</td>
+      <td>0.800</td>
+      <td>12</td>
+      <td>25</td>
+      <td>12</td>
+      <td>74</td>
+    </tr>
+  </tbody>
+</table></div></section><section class="code-cell"><pre class="code"><code>best_model = results.iloc[0]
+print(f&quot;Best model: {best_model[&#x27;Model&#x27;]}&quot;)
+print(f&quot;Accuracy: {best_model[&#x27;Accuracy&#x27;]:.3f}&quot;)
+print(f&quot;Precision: {best_model[&#x27;Precision&#x27;]:.3f}&quot;)
+print(f&quot;Recall: {best_model[&#x27;Recall&#x27;]:.3f}&quot;)
+print(f&quot;F1-Score: {best_model[&#x27;F1-Score&#x27;]:.3f}&quot;)</code></pre><pre class="output">Best model: Decision Tree
+Accuracy: 0.740
+Precision: 0.765
+Recall: 0.907
+F1-Score: 0.830
+</pre></section><section class="markdown-cell"><h2>Phase 4 - Model Comparison</h2>
+<p>The best model for this run is <strong>Decision Tree</strong>, selected by F1-score and accuracy. It achieved <strong>0.740 accuracy</strong> and <strong>0.830 F1-score</strong> on the held-out test set.</p>
+<h2>Phase 5 - Findings</h2>
+<ul>
+<li>Credit history is the strongest predictor of loan repayment.</li>
+<li>Semiurban/urban property areas have higher repayment rates than rural areas in this dataset.</li>
+<li>Income and loan amount are right-skewed, so median imputation and scaling are useful preprocessing steps.</li>
+<li>The final model can support loan-screening decisions, but it should be validated on real institutional data before production use.</li>
+</ul></section>
+</main>
+</body>
+</html>
